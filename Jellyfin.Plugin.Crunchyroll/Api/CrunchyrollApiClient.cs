@@ -136,11 +136,17 @@ public class CrunchyrollApiClient : IDisposable
                 var errorContent = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 
                 // Check if blocked by Cloudflare
-                if (response.StatusCode == System.Net.HttpStatusCode.Forbidden && 
-                    errorContent.Contains("cloudflare", StringComparison.OrdinalIgnoreCase))
+                // Check if blocked by Cloudflare (403 Forbidden is the standard indicator)
+                if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
                 {
-                    _logger.LogWarning("Crunchyroll API blocked by Cloudflare. Switching to scraping mode.");
+                    _logger.LogWarning("Crunchyroll API authentication returned Forbidden (likely Cloudflare block). Switching to scraping mode.");
                     _useScrapingMode = true;
+                    
+                    if (!HasFlareSolverr)
+                    {
+                        _logger.LogWarning("Cloudflare block detected but FlareSolverr URL is not configured. Please configure FlareSolverr URL in the plugin settings to enable fallback.");
+                    }
+                    
                     return false;
                 }
                 
