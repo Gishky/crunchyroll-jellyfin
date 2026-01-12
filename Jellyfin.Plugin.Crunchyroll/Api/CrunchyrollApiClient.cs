@@ -39,6 +39,7 @@ public class CrunchyrollApiClient : IDisposable
     // Rate limits to prevent flooding Cloudflare
     private static DateTime _lastAuthAttempt = DateTime.MinValue;
     private static readonly TimeSpan MinAuthInterval = TimeSpan.FromSeconds(10);
+    private static readonly Random _random = new Random();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CrunchyrollApiClient"/> class.
@@ -255,6 +256,9 @@ public class CrunchyrollApiClient : IDisposable
         {
             return default;
         }
+
+        // Add random jitter to behave more like a human client and avoid rate limits (0.5s to 1.5s)
+        await Task.Delay(_random.Next(500, 1500), cancellationToken).ConfigureAwait(false);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);

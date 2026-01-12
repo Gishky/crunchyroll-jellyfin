@@ -172,6 +172,18 @@ public static partial class CrunchyrollHtmlScraper
                 if (thumbMatch.Success)
                 {
                     var thumbnailUrl = thumbMatch.Groups[1].Value;
+                    
+                    // Upgrade thumbnail quality to 1080p
+                    // Original: .../fit=contain,format=auto,quality=70,width=320,height=180/...
+                    // Target: .../fit=contain,format=auto,quality=85,width=1920,height=1080/...
+                    if (thumbnailUrl.Contains("width=") && thumbnailUrl.Contains("height="))
+                    {
+                        thumbnailUrl = thumbnailUrl
+                            .Replace("width=320", "width=1920")
+                            .Replace("height=180", "height=1080")
+                            .Replace("quality=70", "quality=85");
+                    }
+
                     episode.Images = new CrunchyrollEpisodeImages
                     {
                         Thumbnail = new List<List<CrunchyrollImage>>
@@ -181,8 +193,8 @@ public static partial class CrunchyrollHtmlScraper
                                 new CrunchyrollImage
                                 {
                                     Source = thumbnailUrl,
-                                    Width = 320,
-                                    Height = 180,
+                                    Width = 1920,
+                                    Height = 1080,
                                     Type = "thumbnail"
                                 }
                             }
