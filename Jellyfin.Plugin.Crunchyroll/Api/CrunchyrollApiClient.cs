@@ -235,6 +235,11 @@ public class CrunchyrollApiClient : IDisposable
     /// <summary>
     /// Makes an authenticated GET request to the Crunchyroll API.
     /// </summary>
+    /// <summary>
+    /// Makes an authenticated GET request to the Crunchyroll API.
+    /// Handles token expiration (401) by re-authenticating and retrying.
+    /// Handles Cloudflare blocks (403) by enabling scraping mode.
+    /// </summary>
     private async Task<T?> GetAuthenticatedAsync<T>(string url, CancellationToken cancellationToken)
     {
         var isAuthenticated = await TryEnsureAuthenticatedAsync(cancellationToken).ConfigureAwait(false);
@@ -248,6 +253,36 @@ public class CrunchyrollApiClient : IDisposable
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
 
         var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+
+        // Handle Token Expiration / Invalidation
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            _logger.LogWarning("Crunchyroll API returned Unauthorized (401). clearing token and retrying authentication...");
+            
+            // Clear static token to force re-auth
+            _accessToken = null;
+            _tokenExpiration = DateTime.MinValue;
+
+            // Re-authenticate
+            isAuthenticated = await TryEnsureAuthenticatedAsync(cancellationToken).ConfigureAwait(false);
+            if (!isAuthenticated)
+            {
+                return default;
+            }
+
+            // Retry request with new token
+            using var retryRequest = new HttpRequestMessage(HttpMethod.Get, url);
+            retryRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+            response = await _httpClient.SendAsync(retryRequest, cancellationToken).ConfigureAwait(false);
+        }
+        
+        // Handle Cloudflare Block
+        if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            _logger.LogWarning("Crunchyroll API request Forbidden (403). Likely Cloudflare block. Switching to scraping mode for future requests.");
+            _useScrapingMode = true;
+            return default;
+        }
         
         if (!response.IsSuccessStatusCode)
         {
