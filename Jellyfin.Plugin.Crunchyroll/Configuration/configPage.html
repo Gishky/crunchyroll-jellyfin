@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Crunchyroll Metadata</title>
+</head>
+<body>
+    <div id="CrunchyrollConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="CrunchyrollConfigForm">
+                    <div class="sectionTitleContainer flex align-items-center">
+                        <h2 class="sectionTitle">Crunchyroll Metadata Settings</h2>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h3 class="sectionTitle">Language Settings</h3>
+                        
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="selectPreferredLanguage">Preferred Language</label>
+                            <select id="selectPreferredLanguage" is="emby-select" class="emby-select-withcolor">
+                                <option value="pt-BR">Português (Brasil)</option>
+                                <option value="pt-PT">Português (Portugal)</option>
+                                <option value="en-US">English (US)</option>
+                                <option value="en-GB">English (UK)</option>
+                                <option value="es-ES">Español (España)</option>
+                                <option value="es-419">Español (Latinoamérica)</option>
+                                <option value="fr-FR">Français</option>
+                                <option value="de-DE">Deutsch</option>
+                                <option value="it-IT">Italiano</option>
+                                <option value="ja-JP">日本語</option>
+                                <option value="ko-KR">한국어</option>
+                                <option value="zh-CN">中文 (简体)</option>
+                                <option value="ar-SA">العربية</option>
+                                <option value="ru-RU">Русский</option>
+                            </select>
+                            <div class="fieldDescription">
+                                Select the preferred language for anime metadata.
+                            </div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="selectFallbackLanguage">Fallback Language</label>
+                            <select id="selectFallbackLanguage" is="emby-select" class="emby-select-withcolor">
+                                <option value="en-US">English (US)</option>
+                                <option value="pt-BR">Português (Brasil)</option>
+                                <option value="ja-JP">日本語</option>
+                            </select>
+                            <div class="fieldDescription">
+                                Fallback language when preferred language metadata is not available.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h3 class="sectionTitle">Season & Episode Mapping</h3>
+
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="chkEnableSeasonMapping" type="checkbox" is="emby-checkbox" />
+                                <span>Enable Season Mapping</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Automatically maps Jellyfin seasons to Crunchyroll seasons. 
+                                This solves the problem where databases like AniDB treat each season as a separate anime.
+                            </div>
+                        </div>
+
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label">
+                                <input id="chkEnableEpisodeOffsetMapping" type="checkbox" is="emby-checkbox" />
+                                <span>Enable Episode Offset Mapping</span>
+                            </label>
+                            <div class="fieldDescription checkboxFieldDescription">
+                                Handles cases where Crunchyroll uses continuous episode numbering across seasons.
+                                For example: If your Season 2 starts with Episode 1, but Crunchyroll starts at Episode 25,
+                                this option will automatically calculate the correct offset.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection">
+                        <h3 class="sectionTitle">Cache Settings</h3>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="txtCacheExpiration">Cache Expiration (hours)</label>
+                            <input id="txtCacheExpiration" type="number" is="emby-input" min="1" max="168" />
+                            <div class="fieldDescription">
+                                How long metadata should be cached before refreshing (1-168 hours).
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="verticalSection" style="margin-top: 2em;">
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <script type="text/javascript">
+            var CrunchyrollConfigPage = {
+                pluginUniqueId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+            };
+
+            document.querySelector('#CrunchyrollConfigPage')
+                .addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(CrunchyrollConfigPage.pluginUniqueId).then(function (config) {
+                        document.querySelector('#selectPreferredLanguage').value = config.PreferredLanguage || 'pt-BR';
+                        document.querySelector('#selectFallbackLanguage').value = config.FallbackLanguage || 'en-US';
+                        document.querySelector('#chkEnableSeasonMapping').checked = config.EnableSeasonMapping !== false;
+                        document.querySelector('#chkEnableEpisodeOffsetMapping').checked = config.EnableEpisodeOffsetMapping !== false;
+                        document.querySelector('#txtCacheExpiration').value = config.CacheExpirationHours || 24;
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+            document.querySelector('#CrunchyrollConfigForm')
+                .addEventListener('submit', function (e) {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(CrunchyrollConfigPage.pluginUniqueId).then(function (config) {
+                        config.PreferredLanguage = document.querySelector('#selectPreferredLanguage').value;
+                        config.FallbackLanguage = document.querySelector('#selectFallbackLanguage').value;
+                        config.EnableSeasonMapping = document.querySelector('#chkEnableSeasonMapping').checked;
+                        config.EnableEpisodeOffsetMapping = document.querySelector('#chkEnableEpisodeOffsetMapping').checked;
+                        config.CacheExpirationHours = parseInt(document.querySelector('#txtCacheExpiration').value) || 24;
+
+                        ApiClient.updatePluginConfiguration(CrunchyrollConfigPage.pluginUniqueId, config).then(function (result) {
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                        });
+                    });
+                    e.preventDefault();
+                    return false;
+                });
+        </script>
+    </div>
+</body>
+</html>

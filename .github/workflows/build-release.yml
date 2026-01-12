@@ -1,0 +1,109 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build
+      run: dotnet build -c Release --no-restore
+
+    - name: Publish
+      run: dotnet publish Jellyfin.Plugin.Crunchyroll/Jellyfin.Plugin.Crunchyroll.csproj -c Release -o ./publish
+
+    - name: Create plugin zip
+      run: |
+        cd publish
+        zip -r ../Jellyfin.Plugin.Crunchyroll.zip .
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Jellyfin.Plugin.Crunchyroll
+        path: Jellyfin.Plugin.Crunchyroll.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download build artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: Jellyfin.Plugin.Crunchyroll
+
+    - name: Calculate checksum
+      id: checksum
+      run: |
+        CHECKSUM=$(md5sum Jellyfin.Plugin.Crunchyroll.zip | awk '{print $1}')
+        echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
+        echo "Checksum: $CHECKSUM"
+
+    - name: Get version from tag
+      id: version
+      run: |
+        VERSION=${GITHUB_REF#refs/tags/v}
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+
+    - name: Update manifest.json
+      run: |
+        VERSION=${{ steps.version.outputs.version }}
+        CHECKSUM=${{ steps.checksum.outputs.checksum }}
+        TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        
+        # Update manifest with new version info using jq
+        jq --arg version "${VERSION}.0" \
+           --arg checksum "$CHECKSUM" \
+           --arg timestamp "$TIMESTAMP" \
+           --arg sourceUrl "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/Jellyfin.Plugin.Crunchyroll.zip" \
+           '.[0].versions[0].version = $version | 
+            .[0].versions[0].checksum = $checksum | 
+            .[0].versions[0].timestamp = $timestamp |
+            .[0].versions[0].sourceUrl = $sourceUrl' manifest.json > manifest_updated.json
+        
+        mv manifest_updated.json manifest.json
+        cat manifest.json
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          Jellyfin.Plugin.Crunchyroll.zip
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Commit updated manifest
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add manifest.json
+        git commit -m "Update manifest for v${{ steps.version.outputs.version }}" || echo "No changes to commit"
+        git push origin HEAD:main
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

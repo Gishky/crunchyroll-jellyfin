@@ -1,0 +1,11 @@
+[
+  {
+    "guid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Crunchyroll Metadata",
+    "description": "Fetches anime metadata from Crunchyroll with intelligent season and episode mapping. Solves common issues with episode numbering across seasons and treats all seasons as part of the same series.",
+    "overview": "Anime metadata provider with smart episode offset calculation",
+    "owner": "ocnaibill",
+    "category": "Metadata",
+    "versions": []
+  }
+]
