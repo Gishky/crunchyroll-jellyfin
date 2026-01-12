@@ -321,6 +321,9 @@ public class CrunchyrollApiClient : IDisposable
         }
     }
 
+    private Dictionary<string, List<CrunchyrollEpisode>> _scrapedEpisodesCache = new();
+    private List<CrunchyrollSeason> _scrapedSeasonsCache = new();
+
     /// <summary>
     /// Gets all seasons for a series.
     /// </summary>
@@ -341,14 +344,66 @@ public class CrunchyrollApiClient : IDisposable
                 var response = await GetAuthenticatedAsync<CrunchyrollResponse<CrunchyrollSeason>>(url, cancellationToken)
                     .ConfigureAwait(false);
 
+                // If successful (response is not null), return data.
+                // If GetAuthenticatedAsync returned null (due to auth failure triggering scraping mode), flow continues to scraping block.
                 if (response?.Data != null)
                 {
                     return response.Data;
                 }
             }
 
-            // Scraping for seasons is more complex - would need to parse dropdown
-            // For now, return empty list if API fails
+            // Fall back to scraping if API failed or in scraping mode
+            if (_useScrapingMode)
+            {
+                if (!HasFlareSolverr)
+                {
+                    _logger.LogWarning("Cannot scrape seasons: FlareSolverr is not configured.");
+                    return new List<CrunchyrollSeason>();
+                }
+
+                // If cache is populated for this instance, return it (assuming one instance per request chain)
+                if (_scrapedSeasonsCache.Count > 0)
+                {
+                    return _scrapedSeasonsCache;
+                }
+
+                // Scrape the series page
+                var url = $"{BaseUrl}/series/{seriesId}";
+                _logger.LogInformation("Scraping series page via FlareSolverr: {Url}", url);
+                
+                var html = await GetPageViaFlareSolverrAsync(url, cancellationToken).ConfigureAwait(false);
+                if (string.IsNullOrEmpty(html))
+                {
+                    return new List<CrunchyrollSeason>();
+                }
+
+                // Reuse the HTML scraper to get episodes
+                var episodes = CrunchyrollHtmlScraper.ExtractEpisodesFromHtml(html, _logger);
+                
+                if (episodes.Count > 0)
+                {
+                    // Organize into a single "Season" since scraping doesn't easily distinguish seasons yet
+                    // We use the seriesId as the seasonId purely for internal mapping in this fallback mode
+                    var scrapedSeasonId = $"{seriesId}_scraped";
+                    var season = new CrunchyrollSeason
+                    {
+                        Id = scrapedSeasonId,
+                        Title = "Season 1 (Scraped)", // Placeholder title
+                        SeasonNumber = 1,
+                        SeriesId = seriesId
+                    };
+
+                    _scrapedSeasonsCache.Clear();
+                    _scrapedSeasonsCache.Add(season);
+
+                    _scrapedEpisodesCache.Clear();
+                    _scrapedEpisodesCache[scrapedSeasonId] = episodes;
+
+                    _logger.LogInformation("Scraped {Count} episodes and created fallback season", episodes.Count);
+                    return _scrapedSeasonsCache;
+                }
+            }
+
             _logger.LogDebug("No seasons found for series: {SeriesId}", seriesId);
             return new List<CrunchyrollSeason>();
         }
@@ -369,20 +424,40 @@ public class CrunchyrollApiClient : IDisposable
     {
         try
         {
-            // Try API first if not in scraping mode
-            if (!_useScrapingMode)
+            // If in scraping mode, try cache first
+            if (_useScrapingMode)
             {
-                var url = $"{ApiBaseUrl}/cms/seasons/{seasonId}/episodes?locale={_locale}";
-                
-                _logger.LogDebug("Fetching episodes for season: {SeasonId}", seasonId);
-                
-                var response = await GetAuthenticatedAsync<CrunchyrollResponse<CrunchyrollEpisode>>(url, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (response?.Data != null)
+                if (_scrapedEpisodesCache.TryGetValue(seasonId, out var cachedEpisodes))
                 {
-                    return response.Data;
+                    _logger.LogDebug("Returning {Count} scraped episodes from cache for season {SeasonId}", cachedEpisodes.Count, seasonId);
+                    return cachedEpisodes;
                 }
+                
+                // If not in cache but in scraping mode, we can't do much because we need seriesId to scrape,
+                // and this method only receives seasonId.
+                // However, the provider flow ensures GetSeasons is called first, which populates the cache.
+                _logger.LogWarning("Scraping mode active but no cached episodes found for season {SeasonId}. Ensure GetSeasons was called first.", seasonId);
+                return new List<CrunchyrollEpisode>();
+            }
+
+            var url = $"{ApiBaseUrl}/cms/seasons/{seasonId}/episodes?locale={_locale}";
+            
+            _logger.LogDebug("Fetching episodes for season: {SeasonId}", seasonId);
+            
+            var response = await GetAuthenticatedAsync<CrunchyrollResponse<CrunchyrollEpisode>>(url, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (response?.Data != null)
+            {
+                return response.Data;
+            }
+
+            // If API failed during this call (switched to scraping), we can't fallback easily here without seriesId.
+            // But if GetAuthenticatedAsync returned null due to 403, _useScrapingMode is now true.
+            if (_useScrapingMode && HasFlareSolverr)
+            {
+                 // We could potentially try to scrape if we could resolve seasonId to a URL, but for now rely on cache.
+                 _logger.LogWarning("Switched to scraping mode during GetEpisodes. Falls back to empty list as series context is missing.");
             }
 
             _logger.LogDebug("No episodes found for season: {SeasonId}", seasonId);
