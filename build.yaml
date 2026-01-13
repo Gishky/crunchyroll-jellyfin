@@ -1,20 +1,37 @@
+```
 ---
 name: "Crunchyroll Metadata"
 guid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-version: "1.4.5.0"
+version: "1.4.7.0"
 targetAbi: "10.9.0.0"
 framework: "net8.0"
 overview: "Fetches anime metadata from Crunchyroll with intelligent season and episode mapping."
-description: >
-  A Jellyfin plugin that provides anime metadata from Crunchyroll. 
-  Features intelligent season mapping to handle cases where different databases 
-  treat seasons as separate works, and automatic episode offset calculation 
-  to correctly match local episode numbering with Crunchyroll's continuous numbering scheme.
-category: "Metadata"
 owner: "ocnaibill"
+category: "Metadata"
+image: "logo.png"
+description: "A Jellyfin plugin that scrapes metadata from Crunchyroll. Supports anime series, seasons, and episodes."
+tags:
+- metadata
+- anime
+- crunchyroll
+- scraper
+
 artifacts:
 - "Jellyfin.Plugin.Crunchyroll.dll"
 changelog: >
+  1.4.7.0 - Scraper Logic Refactor
+    - COMPLETE REWRITE of episode extraction logic
+    - Removed fragile dependency on hover/Javascript elements
+    - Added unified regex for "E#", "T# E#", and "#" title formats
+    - Added detection for JSON State (preparation for Multi-Season support)
+    - Cleaner, faster and more robust scraping
+    
+  1.4.6.0 - Title Extraction Fix
+    - Multiple fallback methods to extract episode title
+    - Uses playable-card__title-link when data-t="episode-title" not found
+    - Extracts from aria-label as last resort
+    - Fixes issue where hover component wasn't rendered
+
   1.4.5.0 - Episode Number Parsing Fix
     - Added fallback parsing for "# - Title" format (without E prefix)
     - Better debug logging for title format issues

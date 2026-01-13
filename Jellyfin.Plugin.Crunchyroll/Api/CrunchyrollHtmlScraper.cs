@@ -118,6 +118,13 @@ public static partial class CrunchyrollHtmlScraper
     {
         var episodes = new List<CrunchyrollEpisode>();
 
+        // Debug: Check for JSON state which contains all data cleanly
+        // If this log shows up, we can switch to JSON parsing in the future
+        if (html.Contains("__INITIAL_STATE__") || html.Contains("__NEXT_DATA__"))
+        {
+             logger.LogInformation("[HTML Scraper] Detected embedded JSON State in HTML. Future versions can extract ALL seasons from here.");
+        }
+
         try
         {
             // Match episode cards - they have data-t="episode-card"
@@ -127,57 +134,78 @@ public static partial class CrunchyrollHtmlScraper
             {
                 var cardHtml = match.Value;
                 var episode = new CrunchyrollEpisode();
-
-                // Extract episode ID from link
-                var linkMatch = EpisodeLinkRegex().Match(cardHtml);
-                if (linkMatch.Success)
+                // 1. Extract raw data reliably from the visible title link
+                // This element is always rendered, unlike the hover component
+                var linkMatch = Regex.Match(cardHtml, @"playable-card__title-link""[^>]+href=""(?<url>[^""]+)""[^>]*>(?<fullTitle>[^<]+)</a>", RegexOptions.IgnoreCase);
+                
+                if (!linkMatch.Success) 
                 {
-                    episode.Id = linkMatch.Groups[1].Value;
-                    episode.SlugTitle = linkMatch.Groups[2].Value;
+                    logger.LogWarning("[HTML Scraper] Could not find title link in card");
+                    continue;
                 }
 
-                // Extract episode title (e.g., "E1 - Ryomen Sukuna")
-                var titleMatch = EpisodeTitleRegex().Match(cardHtml);
-                if (titleMatch.Success)
+                string fullTitle = HttpUtility.HtmlDecode(linkMatch.Groups["fullTitle"].Value.Trim());
+                string episodeUrl = linkMatch.Groups["url"].Value;
+
+                // 2. Parse Metadata from Title (Supports: "T2 E13 - Title", "E1 - Title", "101 - Title")
+                // Groups: 1=Season(optional), 2=Episode, 3=Title
+                var metaMatch = Regex.Match(fullTitle, @"^(?:T(?<season>\d+)\s+)?(?:E(?<episode>\d+)\s*[-:]\s*)?(?<title>.+)$", RegexOptions.IgnoreCase);
+
+                if (metaMatch.Success)
                 {
-                    var fullTitle = HttpUtility.HtmlDecode(titleMatch.Groups[1].Value.Trim());
+                    episode.Title = metaMatch.Groups["title"].Value.Trim();
                     
-                    // Parse episode number from title like "E1 - Ryomen Sukuna"
-                    var episodeNumMatch = EpisodeNumberFromTitleRegex().Match(fullTitle);
-                    if (episodeNumMatch.Success)
+                    // If episode number is found in title string
+                    if (metaMatch.Groups["episode"].Success)
                     {
-                        episode.EpisodeNumber = episodeNumMatch.Groups[1].Value;
-                        episode.Title = episodeNumMatch.Groups[2].Value.Trim();
-                        if (int.TryParse(episode.EpisodeNumber, out int epNum))
-                        {
-                            episode.EpisodeNumberInt = epNum;
-                            episode.SequenceNumber = epNum;
-                        }
+                        episode.EpisodeNumber = metaMatch.Groups["episode"].Value;
                     }
-                    else
+                    
+                    // If season number is found (useful for future multi-season support)
+                    if (metaMatch.Groups["season"].Success)
                     {
-                        // Log the title format for debugging
-                        logger.LogDebug("[HTML Scraper] Title doesn't match 'E# - Title' format: '{Title}'", fullTitle);
-                        episode.Title = fullTitle;
-                        
-                        // Try alternative format: just number at start like "1 - Title"
-                        var altMatch = Regex.Match(fullTitle, @"^(\d+)\s*[-–:]\s*(.+)$");
-                        if (altMatch.Success)
-                        {
-                            episode.EpisodeNumber = altMatch.Groups[1].Value;
-                            episode.Title = altMatch.Groups[2].Value.Trim();
-                            if (int.TryParse(episode.EpisodeNumber, out int epNum))
-                            {
-                                episode.EpisodeNumberInt = epNum;
-                                episode.SequenceNumber = epNum;
-                            }
-                            logger.LogDebug("[HTML Scraper] Matched alt format: E{Num}", episode.EpisodeNumber);
-                        }
+                        // Note: We currently prefer the detected season from the page, but this could be useful validation
+                        logger.LogDebug("[HTML Scraper] Detected Season {S} in title: {T}", metaMatch.Groups["season"].Value, fullTitle);
                     }
                 }
                 else
                 {
-                    logger.LogDebug("[HTML Scraper] No title found in episode card");
+                    // Fallback: Use the whole string as title if regex fails completely
+                    episode.Title = fullTitle;
+                    logger.LogDebug("[HTML Scraper] Could not parse metadata from title: '{Title}'", fullTitle);
+                }
+
+                // 3. Extract Episode Number from URL if missing from title (Last resort)
+                // URLs often look like /watch/GZ7UDM1KQ/episode-title
+                if (string.IsNullOrEmpty(episode.EpisodeNumber))
+                {
+                    // Sometimes aria-label fallback helps
+                     var ariaMatch = Regex.Match(cardHtml, @"aria-label=""Reproduzir[^""]*?Epis[oó]dio\s+(?<num>\d+)", RegexOptions.IgnoreCase);
+                     if (ariaMatch.Success)
+                     {
+                         episode.EpisodeNumber = ariaMatch.Groups["num"].Value;
+                     }
+                }
+
+                // 4. Final Processing
+                if (int.TryParse(episode.EpisodeNumber, out int epNum))
+                {
+                    episode.EpisodeNumberInt = epNum;
+                    episode.SequenceNumber = epNum;
+                }
+
+                if (string.IsNullOrEmpty(episode.Id))
+                {
+                    // Extract ID from URL: /watch/ID/slug
+                    var urlParts = episodeUrl.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (urlParts.Length >= 2 && urlParts.Contains("watch"))
+                    {
+                        int watchIndex = Array.IndexOf(urlParts, "watch");
+                        if (watchIndex + 1 < urlParts.Length)
+                        {
+                            episode.Id = urlParts[watchIndex + 1];
+                        }
+                    }
                 }
 
                 // Extract episode description
@@ -356,14 +384,7 @@ public static partial class CrunchyrollHtmlScraper
     [GeneratedRegex(@"<div[^>]*class=""[^""]*playable-card[^""]*""[^>]*data-t=""episode-card[^""]*""[^>]*>.*?</div>\s*</div>\s*</div>\s*</div>\s*</div>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex EpisodeCardRegex();
 
-    [GeneratedRegex(@"href=""[^""]*?/watch/([A-Z0-9]+)/([a-z0-9-]+)""", RegexOptions.IgnoreCase)]
-    private static partial Regex EpisodeLinkRegex();
 
-    [GeneratedRegex(@"data-t=""episode-title""[^>]*>([^<]+)<", RegexOptions.IgnoreCase)]
-    private static partial Regex EpisodeTitleRegex();
-
-    [GeneratedRegex(@"^E(\d+)\s*-\s*(.+)$", RegexOptions.IgnoreCase)]
-    private static partial Regex EpisodeNumberFromTitleRegex();
 
     [GeneratedRegex(@"data-t=""description""[^>]*>([^<]+)<", RegexOptions.IgnoreCase)]
     private static partial Regex EpisodeDescriptionRegex();
