@@ -113,161 +113,85 @@ public static partial class CrunchyrollHtmlScraper
     /// </summary>
     /// <param name="html">The HTML content of the series page.</param>
     /// <param name="logger">Logger for debugging.</param>
+    /// <param name="debugOutputPath">Optional path to save debug HTML output.</param>
     /// <returns>List of extracted episodes.</returns>
-    public static List<CrunchyrollEpisode> ExtractEpisodesFromHtml(string html, ILogger logger)
+    public static List<CrunchyrollEpisode> ExtractEpisodesFromHtml(string html, ILogger logger, string? debugOutputPath = null)
     {
         var episodes = new List<CrunchyrollEpisode>();
 
-        // Debug: Check for JSON state which contains all data cleanly
-        // If this log shows up, we can switch to JSON parsing in the future
-        if (html.Contains("__INITIAL_STATE__") || html.Contains("__NEXT_DATA__"))
+        // Save HTML for debugging if path is provided
+        if (!string.IsNullOrEmpty(debugOutputPath))
         {
-             logger.LogInformation("[HTML Scraper] Detected embedded JSON State in HTML. Future versions can extract ALL seasons from here.");
+            try
+            {
+                var debugFile = Path.Combine(debugOutputPath, $"crunchyroll_debug_{DateTime.Now:yyyyMMdd_HHmmss}.html");
+                File.WriteAllText(debugFile, html);
+                logger.LogInformation("[HTML Debug] Saved HTML to: {Path}", debugFile);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "[HTML Debug] Failed to save debug HTML");
+            }
         }
+
+        // Debug: Log HTML structure indicators
+        logger.LogInformation("[HTML Scraper] HTML length: {Length} chars", html.Length);
+        logger.LogInformation("[HTML Scraper] Contains 'episode-card': {Found}", html.Contains("episode-card"));
+        logger.LogInformation("[HTML Scraper] Contains 'playable-card': {Found}", html.Contains("playable-card"));
+        logger.LogInformation("[HTML Scraper] Contains 'data-t=': {Found}", html.Contains("data-t="));
+        logger.LogInformation("[HTML Scraper] Contains '/watch/': {Found}", html.Contains("/watch/"));
+        logger.LogInformation("[HTML Scraper] Contains '__INITIAL_STATE__': {Found}", html.Contains("__INITIAL_STATE__"));
+        logger.LogInformation("[HTML Scraper] Contains '__NEXT_DATA__': {Found}", html.Contains("__NEXT_DATA__"));
+        logger.LogInformation("[HTML Scraper] Contains 'erc-playable-card': {Found}", html.Contains("erc-playable-card"));
+        logger.LogInformation("[HTML Scraper] Contains 'episode': {Count} occurrences", 
+            System.Text.RegularExpressions.Regex.Matches(html, "episode", RegexOptions.IgnoreCase).Count);
 
         try
         {
-            // Match episode cards - they have data-t="episode-card"
+            // Try multiple extraction strategies
+            
+            // Strategy 1: Original data-t="episode-card" pattern
             var episodeMatches = EpisodeCardRegex().Matches(html);
-
-            foreach (Match match in episodeMatches)
+            if (episodeMatches.Count > 0)
             {
-                var cardHtml = match.Value;
-                var episode = new CrunchyrollEpisode();
-                // 1. Extract raw data reliably from the visible title link
-                // This element is always rendered, unlike the hover component
-                var linkMatch = Regex.Match(cardHtml, @"playable-card__title-link""[^>]+href=""(?<url>[^""]+)""[^>]*>(?<fullTitle>[^<]+)</a>", RegexOptions.IgnoreCase);
-                
-                if (!linkMatch.Success) 
+                logger.LogInformation("[HTML Scraper] Strategy 1: Found {Count} episode cards with data-t='episode-card'", episodeMatches.Count);
+                episodes = ExtractFromEpisodeCardMatches(episodeMatches, logger);
+            }
+            
+            // Strategy 2: Try erc-playable-card pattern (newer Crunchyroll structure)
+            if (episodes.Count == 0)
+            {
+                logger.LogInformation("[HTML Scraper] Strategy 2: Trying erc-playable-card pattern...");
+                var ercMatches = ErcPlayableCardRegex().Matches(html);
+                if (ercMatches.Count > 0)
                 {
-                    logger.LogWarning("[HTML Scraper] Could not find title link in card");
-                    continue;
-                }
-
-                string fullTitle = HttpUtility.HtmlDecode(linkMatch.Groups["fullTitle"].Value.Trim());
-                string episodeUrl = linkMatch.Groups["url"].Value;
-
-                // 2. Parse Metadata from Title (Supports: "T2 E13 - Title", "E1 - Title", "101 - Title")
-                // Groups: 1=Season(optional), 2=Episode, 3=Title
-                var metaMatch = Regex.Match(fullTitle, @"^(?:T(?<season>\d+)\s+)?(?:E(?<episode>\d+)\s*[-:]\s*)?(?<title>.+)$", RegexOptions.IgnoreCase);
-
-                if (metaMatch.Success)
-                {
-                    episode.Title = metaMatch.Groups["title"].Value.Trim();
-                    
-                    // If episode number is found in title string
-                    if (metaMatch.Groups["episode"].Success)
-                    {
-                        episode.EpisodeNumber = metaMatch.Groups["episode"].Value;
-                    }
-                    
-                    // If season number is found (useful for future multi-season support)
-                    if (metaMatch.Groups["season"].Success)
-                    {
-                        // Note: We currently prefer the detected season from the page, but this could be useful validation
-                        logger.LogDebug("[HTML Scraper] Detected Season {S} in title: {T}", metaMatch.Groups["season"].Value, fullTitle);
-                    }
-                }
-                else
-                {
-                    // Fallback: Use the whole string as title if regex fails completely
-                    episode.Title = fullTitle;
-                    logger.LogDebug("[HTML Scraper] Could not parse metadata from title: '{Title}'", fullTitle);
-                }
-
-                // 3. Extract Episode Number from URL if missing from title (Last resort)
-                // URLs often look like /watch/GZ7UDM1KQ/episode-title
-                if (string.IsNullOrEmpty(episode.EpisodeNumber))
-                {
-                    // Sometimes aria-label fallback helps
-                     var ariaMatch = Regex.Match(cardHtml, @"aria-label=""Reproduzir[^""]*?Epis[oó]dio\s+(?<num>\d+)", RegexOptions.IgnoreCase);
-                     if (ariaMatch.Success)
-                     {
-                         episode.EpisodeNumber = ariaMatch.Groups["num"].Value;
-                     }
-                }
-
-                // 4. Final Processing
-                if (int.TryParse(episode.EpisodeNumber, out int epNum))
-                {
-                    episode.EpisodeNumberInt = epNum;
-                    episode.SequenceNumber = epNum;
-                }
-
-                if (string.IsNullOrEmpty(episode.Id))
-                {
-                    // Extract ID from URL: /watch/ID/slug
-                    var urlParts = episodeUrl.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
-                    if (urlParts.Length >= 2 && urlParts.Contains("watch"))
-                    {
-                        int watchIndex = Array.IndexOf(urlParts, "watch");
-                        if (watchIndex + 1 < urlParts.Length)
-                        {
-                            episode.Id = urlParts[watchIndex + 1];
-                        }
-                    }
-                }
-
-                // Extract episode description
-                var descMatch = EpisodeDescriptionRegex().Match(cardHtml);
-                if (descMatch.Success)
-                {
-                    episode.Description = HttpUtility.HtmlDecode(descMatch.Groups[1].Value.Trim());
-                }
-
-                // Extract thumbnail image
-                var thumbMatch = EpisodeThumbnailRegex().Match(cardHtml);
-                if (thumbMatch.Success)
-                {
-                    var thumbnailUrl = thumbMatch.Groups[1].Value;
-                    
-                    // Upgrade thumbnail quality to 1080p
-                    // Original: .../fit=contain,format=auto,quality=70,width=320,height=180/...
-                    // Target: .../fit=contain,format=auto,quality=85,width=1920,height=1080/...
-                    if (thumbnailUrl.Contains("width=") && thumbnailUrl.Contains("height="))
-                    {
-                        thumbnailUrl = thumbnailUrl
-                            .Replace("width=320", "width=1920")
-                            .Replace("height=180", "height=1080")
-                            .Replace("quality=70", "quality=85");
-                    }
-
-                    episode.Images = new CrunchyrollEpisodeImages
-                    {
-                        Thumbnail = new List<List<CrunchyrollImage>>
-                        {
-                            new List<CrunchyrollImage>
-                            {
-                                new CrunchyrollImage
-                                {
-                                    Source = thumbnailUrl,
-                                    Width = 1920,
-                                    Height = 1080,
-                                    Type = "thumbnail"
-                                }
-                            }
-                        }
-                    };
-                }
-
-                // Extract duration
-                var durationMatch = EpisodeDurationRegex().Match(cardHtml);
-                if (durationMatch.Success)
-                {
-                    var durationStr = durationMatch.Groups[1].Value;
-                    if (int.TryParse(durationStr.Replace("m", ""), out int minutes))
-                    {
-                        episode.DurationMs = minutes * 60 * 1000;
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(episode.Id))
-                {
-                    episodes.Add(episode);
+                    logger.LogInformation("[HTML Scraper] Found {Count} erc-playable-card elements", ercMatches.Count);
+                    episodes = ExtractFromErcPlayableCards(ercMatches, logger);
                 }
             }
+            
+            // Strategy 3: Try extracting from __NEXT_DATA__ JSON
+            if (episodes.Count == 0 && html.Contains("__NEXT_DATA__"))
+            {
+                logger.LogInformation("[HTML Scraper] Strategy 3: Trying __NEXT_DATA__ JSON extraction...");
+                episodes = ExtractFromNextDataJson(html, logger);
+            }
+            
+            // Strategy 4: Try extracting from __INITIAL_STATE__ JSON
+            if (episodes.Count == 0 && html.Contains("__INITIAL_STATE__"))
+            {
+                logger.LogInformation("[HTML Scraper] Strategy 4: Trying __INITIAL_STATE__ JSON extraction...");
+                episodes = ExtractFromInitialStateJson(html, logger);
+            }
+            
+            // Strategy 5: Generic /watch/ link extraction as fallback
+            if (episodes.Count == 0)
+            {
+                logger.LogInformation("[HTML Scraper] Strategy 5: Trying generic /watch/ link extraction...");
+                episodes = ExtractFromWatchLinks(html, logger);
+            }
 
-            // Log which episodes were found for debugging season issues
+            // Log results
             if (episodes.Count > 0)
             {
                 var episodeNumbers = string.Join(", ", episodes.Select(e => $"E{e.EpisodeNumber ?? "?"}"));
@@ -278,7 +202,12 @@ public static partial class CrunchyrollHtmlScraper
             }
             else
             {
-                logger.LogWarning("[HTML Scraper] No episodes found in HTML. Looking for 'episode-card' elements.");
+                logger.LogWarning("[HTML Scraper] No episodes found after trying all strategies. The page structure may have changed significantly.");
+                
+                // Log a sample of the HTML for debugging
+                var sampleLength = Math.Min(2000, html.Length);
+                var sample = html.Substring(0, sampleLength);
+                logger.LogWarning("[HTML Scraper] First {Length} chars of HTML: {Sample}", sampleLength, sample);
             }
         }
         catch (Exception ex)
@@ -286,6 +215,370 @@ public static partial class CrunchyrollHtmlScraper
             logger.LogError(ex, "Error extracting episodes from HTML");
         }
 
+        return episodes;
+    }
+
+    /// <summary>
+    /// Extracts episodes from the original episode-card regex matches.
+    /// </summary>
+    private static List<CrunchyrollEpisode> ExtractFromEpisodeCardMatches(MatchCollection matches, ILogger logger)
+    {
+        var episodes = new List<CrunchyrollEpisode>();
+        
+        foreach (Match match in matches)
+        {
+            var cardHtml = match.Value;
+            var episode = new CrunchyrollEpisode();
+            
+            // Extract from title link
+            var linkMatch = Regex.Match(cardHtml, @"playable-card__title-link""[^>]+href=""(?<url>[^""]+)""[^>]*>(?<fullTitle>[^<]+)</a>", RegexOptions.IgnoreCase);
+            
+            if (!linkMatch.Success) 
+            {
+                logger.LogWarning("[HTML Scraper] Could not find title link in card");
+                continue;
+            }
+
+            string fullTitle = HttpUtility.HtmlDecode(linkMatch.Groups["fullTitle"].Value.Trim());
+            string episodeUrl = linkMatch.Groups["url"].Value;
+
+            // Parse metadata from title
+            var metaMatch = Regex.Match(fullTitle, @"^(?:T(?<season>\d+)\s+)?(?:E(?<episode>\d+)\s*[-:]\s*)?(?<title>.+)$", RegexOptions.IgnoreCase);
+
+            if (metaMatch.Success)
+            {
+                episode.Title = metaMatch.Groups["title"].Value.Trim();
+                if (metaMatch.Groups["episode"].Success)
+                {
+                    episode.EpisodeNumber = metaMatch.Groups["episode"].Value;
+                }
+            }
+            else
+            {
+                episode.Title = fullTitle;
+            }
+
+            // Extract episode number from aria-label if missing
+            if (string.IsNullOrEmpty(episode.EpisodeNumber))
+            {
+                var ariaMatch = Regex.Match(cardHtml, @"aria-label=""Reproduzir[^""]*?Epis[oó]dio\s+(?<num>\d+)", RegexOptions.IgnoreCase);
+                if (ariaMatch.Success)
+                {
+                    episode.EpisodeNumber = ariaMatch.Groups["num"].Value;
+                }
+            }
+
+            // Set episode number int
+            if (int.TryParse(episode.EpisodeNumber, out int epNum))
+            {
+                episode.EpisodeNumberInt = epNum;
+                episode.SequenceNumber = epNum;
+            }
+
+            // Extract ID from URL
+            if (string.IsNullOrEmpty(episode.Id))
+            {
+                var urlParts = episodeUrl.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+                if (urlParts.Length >= 2 && urlParts.Contains("watch"))
+                {
+                    int watchIndex = Array.IndexOf(urlParts, "watch");
+                    if (watchIndex + 1 < urlParts.Length)
+                    {
+                        episode.Id = urlParts[watchIndex + 1];
+                    }
+                }
+            }
+
+            // Extract description
+            var descMatch = EpisodeDescriptionRegex().Match(cardHtml);
+            if (descMatch.Success)
+            {
+                episode.Description = HttpUtility.HtmlDecode(descMatch.Groups[1].Value.Trim());
+            }
+
+            // Extract thumbnail
+            var thumbMatch = EpisodeThumbnailRegex().Match(cardHtml);
+            if (thumbMatch.Success)
+            {
+                var thumbnailUrl = thumbMatch.Groups[1].Value;
+                if (thumbnailUrl.Contains("width=") && thumbnailUrl.Contains("height="))
+                {
+                    thumbnailUrl = thumbnailUrl
+                        .Replace("width=320", "width=1920")
+                        .Replace("height=180", "height=1080")
+                        .Replace("quality=70", "quality=85");
+                }
+
+                episode.Images = new CrunchyrollEpisodeImages
+                {
+                    Thumbnail = new List<List<CrunchyrollImage>>
+                    {
+                        new List<CrunchyrollImage>
+                        {
+                            new CrunchyrollImage
+                            {
+                                Source = thumbnailUrl,
+                                Width = 1920,
+                                Height = 1080,
+                                Type = "thumbnail"
+                            }
+                        }
+                    }
+                };
+            }
+
+            // Extract duration
+            var durationMatch = EpisodeDurationRegex().Match(cardHtml);
+            if (durationMatch.Success)
+            {
+                var durationStr = durationMatch.Groups[1].Value;
+                if (int.TryParse(durationStr.Replace("m", ""), out int minutes))
+                {
+                    episode.DurationMs = minutes * 60 * 1000;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(episode.Id))
+            {
+                episodes.Add(episode);
+            }
+        }
+        
+        return episodes;
+    }
+
+    /// <summary>
+    /// Extracts episodes from erc-playable-card elements (newer structure).
+    /// </summary>
+    private static List<CrunchyrollEpisode> ExtractFromErcPlayableCards(MatchCollection matches, ILogger logger)
+    {
+        var episodes = new List<CrunchyrollEpisode>();
+        
+        foreach (Match match in matches)
+        {
+            var cardHtml = match.Value;
+            var episode = new CrunchyrollEpisode();
+            
+            // Look for watch links
+            var watchMatch = Regex.Match(cardHtml, @"href=""[^""]*?/watch/([A-Z0-9]+)(?:/([^""]+))?""", RegexOptions.IgnoreCase);
+            if (watchMatch.Success)
+            {
+                episode.Id = watchMatch.Groups[1].Value;
+            }
+            
+            // Look for title
+            var titleMatch = Regex.Match(cardHtml, @"<(?:h[1-6]|span|a)[^>]*class=""[^""]*title[^""]*""[^>]*>([^<]+)</", RegexOptions.IgnoreCase);
+            if (titleMatch.Success)
+            {
+                episode.Title = HttpUtility.HtmlDecode(titleMatch.Groups[1].Value.Trim());
+            }
+            
+            // Try to find episode number
+            var epNumMatch = Regex.Match(cardHtml, @"(?:E|Episode|Episodio|Episódio)\s*(\d+)", RegexOptions.IgnoreCase);
+            if (epNumMatch.Success)
+            {
+                episode.EpisodeNumber = epNumMatch.Groups[1].Value;
+                if (int.TryParse(episode.EpisodeNumber, out int epNum))
+                {
+                    episode.EpisodeNumberInt = epNum;
+                    episode.SequenceNumber = epNum;
+                }
+            }
+            
+            if (!string.IsNullOrEmpty(episode.Id))
+            {
+                episodes.Add(episode);
+                logger.LogDebug("[ERC] Found episode: {Id} - {Title}", episode.Id, episode.Title);
+            }
+        }
+        
+        return episodes;
+    }
+
+    /// <summary>
+    /// Extracts episodes from __NEXT_DATA__ JSON embedded in the HTML.
+    /// </summary>
+    private static List<CrunchyrollEpisode> ExtractFromNextDataJson(string html, ILogger logger)
+    {
+        var episodes = new List<CrunchyrollEpisode>();
+        
+        try
+        {
+            var jsonMatch = Regex.Match(html, @"<script[^>]*id=""__NEXT_DATA__""[^>]*>([^<]+)</script>", RegexOptions.IgnoreCase);
+            if (!jsonMatch.Success)
+            {
+                jsonMatch = Regex.Match(html, @"__NEXT_DATA__\s*=\s*({[^;]+});", RegexOptions.IgnoreCase);
+            }
+            
+            if (jsonMatch.Success)
+            {
+                var jsonContent = jsonMatch.Groups[1].Value;
+                logger.LogInformation("[NEXT_DATA] Found JSON block, length: {Length}", jsonContent.Length);
+                
+                // Extract episode IDs and titles using regex patterns within the JSON
+                var episodeDataMatches = Regex.Matches(jsonContent, @"""id""\s*:\s*""([A-Z0-9]+)""\s*,\s*""title""\s*:\s*""([^""]+)""", RegexOptions.IgnoreCase);
+                
+                foreach (Match epMatch in episodeDataMatches)
+                {
+                    var episode = new CrunchyrollEpisode
+                    {
+                        Id = epMatch.Groups[1].Value,
+                        Title = HttpUtility.HtmlDecode(epMatch.Groups[2].Value)
+                    };
+                    
+                    // Try to find episode number near this match
+                    var contextStart = Math.Max(0, epMatch.Index - 200);
+                    var contextLength = Math.Min(400, jsonContent.Length - contextStart);
+                    var context = jsonContent.Substring(contextStart, contextLength);
+                    
+                    var epNumMatch = Regex.Match(context, @"""(?:episode|episodeNumber|sequence_number)""\s*:\s*(\d+)", RegexOptions.IgnoreCase);
+                    if (epNumMatch.Success)
+                    {
+                        episode.EpisodeNumber = epNumMatch.Groups[1].Value;
+                        if (int.TryParse(episode.EpisodeNumber, out int epNum))
+                        {
+                            episode.EpisodeNumberInt = epNum;
+                            episode.SequenceNumber = epNum;
+                        }
+                    }
+                    
+                    episodes.Add(episode);
+                }
+                
+                logger.LogInformation("[NEXT_DATA] Extracted {Count} episodes from JSON", episodes.Count);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[NEXT_DATA] Failed to extract from JSON");
+        }
+        
+        return episodes;
+    }
+
+    /// <summary>
+    /// Extracts episodes from __INITIAL_STATE__ JSON embedded in the HTML.
+    /// </summary>
+    private static List<CrunchyrollEpisode> ExtractFromInitialStateJson(string html, ILogger logger)
+    {
+        var episodes = new List<CrunchyrollEpisode>();
+        
+        try
+        {
+            var jsonMatch = Regex.Match(html, @"__INITIAL_STATE__\s*=\s*({.+?})(?:;\s*</script>|$)", RegexOptions.Singleline);
+            
+            if (jsonMatch.Success)
+            {
+                var jsonContent = jsonMatch.Groups[1].Value;
+                logger.LogInformation("[INITIAL_STATE] Found JSON block, length: {Length}", jsonContent.Length);
+                
+                // Look for episode objects in the JSON
+                var episodeMatches = Regex.Matches(jsonContent, @"""([A-Z0-9]{9,})""\s*:\s*\{[^}]*""type""\s*:\s*""episode""[^}]*\}", RegexOptions.IgnoreCase);
+                
+                foreach (Match epMatch in episodeMatches)
+                {
+                    var episodeBlock = epMatch.Value;
+                    var episode = new CrunchyrollEpisode
+                    {
+                        Id = epMatch.Groups[1].Value
+                    };
+                    
+                    // Extract title
+                    var titleMatch = Regex.Match(episodeBlock, @"""title""\s*:\s*""([^""]+)""");
+                    if (titleMatch.Success)
+                    {
+                        episode.Title = HttpUtility.HtmlDecode(titleMatch.Groups[1].Value);
+                    }
+                    
+                    // Extract episode number
+                    var epNumMatch = Regex.Match(episodeBlock, @"""(?:episode_number|sequence_number)""\s*:\s*(\d+)");
+                    if (epNumMatch.Success)
+                    {
+                        episode.EpisodeNumber = epNumMatch.Groups[1].Value;
+                        if (int.TryParse(episode.EpisodeNumber, out int epNum))
+                        {
+                            episode.EpisodeNumberInt = epNum;
+                            episode.SequenceNumber = epNum;
+                        }
+                    }
+                    
+                    episodes.Add(episode);
+                }
+                
+                logger.LogInformation("[INITIAL_STATE] Extracted {Count} episodes from JSON", episodes.Count);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[INITIAL_STATE] Failed to extract from JSON");
+        }
+        
+        return episodes;
+    }
+
+    /// <summary>
+    /// Fallback: Extracts episodes from generic /watch/ links in the HTML.
+    /// </summary>
+    private static List<CrunchyrollEpisode> ExtractFromWatchLinks(string html, ILogger logger)
+    {
+        var episodes = new List<CrunchyrollEpisode>();
+        var seenIds = new HashSet<string>();
+        
+        try
+        {
+            // Find all /watch/ID links
+            var watchMatches = Regex.Matches(html, @"href=""[^""]*?/watch/([A-Z0-9]{9,})(?:/([^""]+))?""[^>]*>", RegexOptions.IgnoreCase);
+            
+            foreach (Match match in watchMatches)
+            {
+                var episodeId = match.Groups[1].Value;
+                
+                if (seenIds.Contains(episodeId))
+                    continue;
+                    
+                seenIds.Add(episodeId);
+                
+                var episode = new CrunchyrollEpisode
+                {
+                    Id = episodeId
+                };
+                
+                // Try to extract slug title
+                if (match.Groups[2].Success)
+                {
+                    var slug = match.Groups[2].Value;
+                    // Convert slug to title (replace hyphens with spaces, capitalize)
+                    episode.Title = HttpUtility.UrlDecode(slug)
+                        .Replace("-", " ")
+                        .Trim();
+                }
+                
+                // Try to find episode number from surrounding context
+                var contextStart = Math.Max(0, match.Index - 100);
+                var contextEnd = Math.Min(html.Length, match.Index + match.Length + 200);
+                var context = html.Substring(contextStart, contextEnd - contextStart);
+                
+                var epNumMatch = Regex.Match(context, @"(?:E|Episode|Episodio|Episódio)\s*(\d+)", RegexOptions.IgnoreCase);
+                if (epNumMatch.Success)
+                {
+                    episode.EpisodeNumber = epNumMatch.Groups[1].Value;
+                    if (int.TryParse(episode.EpisodeNumber, out int epNum))
+                    {
+                        episode.EpisodeNumberInt = epNum;
+                        episode.SequenceNumber = epNum;
+                    }
+                }
+                
+                episodes.Add(episode);
+            }
+            
+            logger.LogInformation("[WatchLinks] Found {Count} unique episode links", episodes.Count);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[WatchLinks] Failed to extract from watch links");
+        }
+        
         return episodes;
     }
 
@@ -384,6 +677,8 @@ public static partial class CrunchyrollHtmlScraper
     [GeneratedRegex(@"<div[^>]*class=""[^""]*playable-card[^""]*""[^>]*data-t=""episode-card[^""]*""[^>]*>.*?</div>\s*</div>\s*</div>\s*</div>\s*</div>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex EpisodeCardRegex();
 
+    [GeneratedRegex(@"<div[^>]*class=""[^""]*erc-playable-card[^""]*""[^>]*>.*?</div>\s*</div>\s*</div>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex ErcPlayableCardRegex();
 
 
     [GeneratedRegex(@"data-t=""description""[^>]*>([^<]+)<", RegexOptions.IgnoreCase)]

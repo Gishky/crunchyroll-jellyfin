@@ -21,7 +21,14 @@ public class PluginConfiguration : BasePluginConfiguration
         Username = string.Empty;
         Password = string.Empty;
         EnablePremiumCaching = false;
+        EnableDebugHtmlLogging = false;
     }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether to save scraped HTML to files for debugging.
+    /// When enabled, HTML responses from FlareSolverr will be saved to the logs directory.
+    /// </summary>
+    public bool EnableDebugHtmlLogging { get; set; }
 
     /// <summary>
     /// Gets or sets the username for login.
