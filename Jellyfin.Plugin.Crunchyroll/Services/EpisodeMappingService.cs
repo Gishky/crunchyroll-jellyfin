@@ -58,7 +58,30 @@ public class EpisodeMappingService
             // Get episodes for this season
             var seasonEpisodes = allEpisodes.GetValueOrDefault(season.Id, new List<CrunchyrollEpisode>());
             
-            // Calculate episode offset
+            // Check if this is a movie/special - map to Season 0 (Specials) instead of regular season
+            // This fixes Issue #1 where Blue Lock movie was incorrectly mapped as Season 2
+            if (IsMovieOrSpecial(season, allEpisodes))
+            {
+                var specialEntry = new SeasonMappingEntry
+                {
+                    JellyfinSeasonNumber = 0, // Season 0 = Specials folder in Jellyfin
+                    CrunchyrollSeasonId = season.Id,
+                    CrunchyrollSeasonNumber = season.SeasonNumber,
+                    CrunchyrollSeasonTitle = season.Title,
+                    EpisodeOffset = 0
+                };
+                
+                mapping.Seasons.Add(specialEntry);
+
+                _logger.LogDebug(
+                    "Movie/special mapping: Jellyfin S0 (Specials) -> Crunchyroll ({Title}, ID: {Id})",
+                    season.Title,
+                    season.Id);
+                
+                continue; // Don't increment jellyfinSeasonNumber for specials
+            }
+
+            // Calculate episode offset for regular seasons
             int episodeOffset = CalculateEpisodeOffset(seasonEpisodes, jellyfinSeasonNumber);
 
             var entry = new SeasonMappingEntry
@@ -83,6 +106,82 @@ public class EpisodeMappingService
         }
 
         return mapping;
+    }
+
+    /// <summary>
+    /// Determines if a season is actually a movie or special that should be excluded from season mapping.
+    /// </summary>
+    /// <param name="season">The season to check.</param>
+    /// <param name="allEpisodes">Dictionary of season ID to episodes.</param>
+    /// <returns>True if the season is a movie or special.</returns>
+    private bool IsMovieOrSpecial(CrunchyrollSeason season, Dictionary<string, List<CrunchyrollEpisode>> allEpisodes)
+    {
+        var title = season.Title?.ToLowerInvariant() ?? string.Empty;
+        
+        // Check for movie/film keywords in title
+        var movieKeywords = new[] { "movie", "film", "filme", "the movie", "劇場版", "gekijouban" };
+        if (movieKeywords.Any(keyword => title.Contains(keyword, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        // Check for special/OVA keywords in title
+        var specialKeywords = new[] { "ova", "oad", "special", "especial", "スペシャル" };
+        if (specialKeywords.Any(keyword => title.Contains(keyword, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        // Check episode count - movies typically have only 1 episode
+        var episodes = allEpisodes.GetValueOrDefault(season.Id ?? string.Empty, new List<CrunchyrollEpisode>());
+        if (episodes.Count == 1)
+        {
+            // Single episode with long duration (> 60 min) is likely a movie
+            var episode = episodes.First();
+            if (episode.DurationMs > 60 * 60 * 1000) // 60 minutes in milliseconds
+            {
+                return true;
+            }
+            
+            // Also check if the episode title contains movie keywords
+            var epTitle = episode.Title?.ToLowerInvariant() ?? string.Empty;
+            if (movieKeywords.Any(keyword => epTitle.Contains(keyword, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+        }
+
+        // Check season keywords if available
+        if (season.Keywords != null)
+        {
+            var keywordCheckList = new[] { "movie", "film", "ova", "special" };
+            if (season.Keywords.Any(k => keywordCheckList.Contains(k.ToLowerInvariant())))
+            {
+                return true;
+            }
+        }
+
+        // Check for "Series: Episode/Character Name" pattern (common for Japanese movies)
+        // Example: "Blue Lock: Episode Nagi" where "Episode" refers to a character, not an episode number
+        if (title.Contains(':') && episodes.Count <= 1)
+        {
+            // If it has a colon and only 1 or 0 episodes, check if it might be a movie
+            var afterColon = title.Split(':').LastOrDefault()?.Trim() ?? string.Empty;
+            
+            // Check if the part after colon starts with "episode" (but not followed by a number)
+            // This catches cases like "Episode Nagi" vs "Episode 1"
+            if (afterColon.StartsWith("episode", StringComparison.OrdinalIgnoreCase))
+            {
+                var afterEpisode = afterColon.Substring("episode".Length).TrimStart();
+                // If what follows "episode" is NOT a number, it's likely a movie title
+                if (!string.IsNullOrEmpty(afterEpisode) && !char.IsDigit(afterEpisode[0]))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

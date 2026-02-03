@@ -320,7 +320,8 @@ public static partial class CrunchyrollHtmlScraper
             string episodeUrl = linkMatch.Groups["url"].Value;
 
             // Parse metadata from title
-            var metaMatch = Regex.Match(fullTitle, @"^(?:T(?<season>\d+)\s+)?(?:E(?<episode>\d+)\s*[-:]\s*)?(?<title>.+)$", RegexOptions.IgnoreCase);
+            // Supports both "T" (Portuguese/Spanish) and "S" (French/English/German) season prefixes
+            var metaMatch = Regex.Match(fullTitle, @"^(?:[TS](?<season>\d+)\s+)?(?:E(?<episode>\d+)\s*[-:]\s*)?(?<title>.+)$", RegexOptions.IgnoreCase);
 
             if (metaMatch.Success)
             {

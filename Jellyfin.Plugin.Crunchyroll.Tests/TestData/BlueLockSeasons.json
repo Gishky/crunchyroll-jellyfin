@@ -1,0 +1,92 @@
+{
+    "blueLock": {
+        "seriesId": "G4PH0WEKE",
+        "title": "Blue Lock",
+        "seasons": [
+            {
+                "id": "GRDQCDZWG",
+                "title": "Blue Lock",
+                "seasonNumber": 1,
+                "seasonSequenceNumber": 1,
+                "numberOfEpisodes": 24,
+                "isSubbed": true,
+                "isDubbed": true,
+                "audioLocales": [
+                    "ja-JP"
+                ]
+            },
+            {
+                "id": "G6K50DP28",
+                "title": "Blue Lock: Episode Nagi",
+                "seasonNumber": 1,
+                "seasonSequenceNumber": 2,
+                "numberOfEpisodes": 1,
+                "isSubbed": true,
+                "isDubbed": false,
+                "audioLocales": [
+                    "ja-JP"
+                ],
+                "keywords": [
+                    "movie",
+                    "film"
+                ],
+                "description": "Blue Lock: Episode Nagi – The Movie"
+            },
+            {
+                "id": "GRMG8Q25R",
+                "title": "Blue Lock Season 2",
+                "seasonNumber": 2,
+                "seasonSequenceNumber": 3,
+                "numberOfEpisodes": 14,
+                "isSubbed": true,
+                "isDubbed": true,
+                "audioLocales": [
+                    "ja-JP"
+                ]
+            }
+        ],
+        "expectedMapping": {
+            "description": "The movie should NOT be mapped as Jellyfin Season 2",
+            "jellyfinSeason1": {
+                "shouldMapTo": "GRDQCDZWG",
+                "crunchyrollTitle": "Blue Lock"
+            },
+            "jellyfinSeason2": {
+                "shouldMapTo": "GRMG8Q25R",
+                "crunchyrollTitle": "Blue Lock Season 2",
+                "currentBugMapsTo": "G6K50DP28",
+                "currentBugTitle": "Blue Lock: Episode Nagi"
+            }
+        }
+    },
+    "internationalPrefixes": {
+        "description": "Test data for season prefix patterns across locales",
+        "examples": [
+            {
+                "locale": "pt-BR",
+                "prefix": "T",
+                "example": "T1 E5 - Título do Episódio"
+            },
+            {
+                "locale": "fr-FR",
+                "prefix": "S",
+                "example": "S1 E5 - Titre de l'épisode"
+            },
+            {
+                "locale": "en-US",
+                "prefix": "S",
+                "example": "S1 E5 - Episode Title"
+            },
+            {
+                "locale": "es-ES",
+                "prefix": "T",
+                "example": "T1 E5 - Título del Episodio"
+            },
+            {
+                "locale": "de-DE",
+                "prefix": "S",
+                "example": "S1 E5 - Episodentitel"
+            }
+        ]
+    }
+}
