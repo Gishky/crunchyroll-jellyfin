@@ -70,6 +70,7 @@ public class CrunchyrollSeriesProvider : IRemoteMetadataProvider<Series, SeriesI
 
         if (series == null)
         {
+            _logger.LogDebug("Failed to retrieve metadata for series: {Name}", info.Name);
             return result;
         }
 
@@ -221,6 +222,7 @@ public class CrunchyrollSeriesProvider : IRemoteMetadataProvider<Series, SeriesI
     {
         if (results.Count == 0)
         {
+            _logger.LogDebug("No results found for search name: {searchName}", searchName);
             return null;
         }
 
@@ -232,6 +234,7 @@ public class CrunchyrollSeriesProvider : IRemoteMetadataProvider<Series, SeriesI
         {
             if (result.Title != null && NormalizeName(result.Title) == normalizedSearch)
             {
+                _logger.LogDebug("Exact match for {searchName} found", searchName);
                 return result;
             }
         }
@@ -251,14 +254,17 @@ public class CrunchyrollSeriesProvider : IRemoteMetadataProvider<Series, SeriesI
             if (score > bestScore)
             {
                 bestScore = score;
-                if(score >= 70){ // Threshold for an acceptable match
-                    bestMatch = result;
-                }
+                bestMatch = result;
             }
         }
-
-        _logger.LogDebug("Best match found with score: {bestScore}", bestScore);
-        return bestMatch;
+        
+        int MappingSensitivity = Plugin.Instance?.Configuration.MappingSensitivity ?? 70;
+        _logger.LogDebug("Best match for {searchName} found with score: {bestScore}/{MappingSensitivity} for {bestMatch}", searchName, bestScore, MappingSensitivity, bestMatch?.Title ?? "None");
+        
+        if(bestScore >=  MappingSensitivity){ // Threshold for an acceptable match
+            return bestMatch;
+        }
+        return null;
     }
 
     private static string NormalizeName(string name)
@@ -280,7 +286,7 @@ public class CrunchyrollSeriesProvider : IRemoteMetadataProvider<Series, SeriesI
 
         if (search.Contains(candidate))
         {
-            return 80 - (search.Length - candidate.Length);
+            return 100 - (search.Length - candidate.Length);
         }
 
         // Word overlap score
@@ -303,6 +309,7 @@ public class CrunchyrollSeriesProvider : IRemoteMetadataProvider<Series, SeriesI
             }
         }
 
-        return (int)(90 * ((float)(matchingWords + similarwords / 2)) / Math.Max(searchWords.Length, candidateWords.Length));
+        float score = 100f * (matchingWords + 0.2f * similarwords) / Math.Max(searchWords.Length, candidateWords.Length);
+        return (int)score;
     }
 }

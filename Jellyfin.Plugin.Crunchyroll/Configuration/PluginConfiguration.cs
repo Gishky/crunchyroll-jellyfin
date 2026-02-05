@@ -22,6 +22,7 @@ public class PluginConfiguration : BasePluginConfiguration
         Password = string.Empty;
         EnablePremiumCaching = false;
         EnableDebugHtmlLogging = false;
+        MappingSensitivity = 70;
     }
 
     /// <summary>
@@ -29,6 +30,11 @@ public class PluginConfiguration : BasePluginConfiguration
     /// When enabled, HTML responses from FlareSolverr will be saved to the logs directory.
     /// </summary>
     public bool EnableDebugHtmlLogging { get; set; }
+
+    /// <summary>
+    /// Gets or sets the mapping sensitivity for matching series names.
+    /// </summary>
+    public int MappingSensitivity { get; set; }
 
     /// <summary>
     /// Gets or sets the username for login.

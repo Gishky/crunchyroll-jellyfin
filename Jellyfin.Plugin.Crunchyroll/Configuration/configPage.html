@@ -154,6 +154,16 @@
                             </div>
                         </div>
                     </div>
+                    <div class="verticalSection">
+                        <h3 class="sectionTitle">Customization</h3>
+
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="txtMappingSensitivity">Mapping Sensitivity</label>
+                            <input id="txtMappingSensitivity" type="text" is="emby-input" />
+                            <div class="fieldDescription">Mapping Sensitivity (0-100). Higher values are more strict. Default: 70</div>
+                        </div>
+
+                    </div>
 
                     <div class="verticalSection" style="margin-top: 2em;">
                         <button is="emby-button" type="submit" class="raised button-submit block emby-button">
@@ -184,6 +194,8 @@
                         document.querySelector('#txtPassword').value = config.Password || '';
                         document.querySelector('#chkEnablePremiumCaching').checked = config.EnablePremiumCaching || false;
 
+                        document.querySelector('#txtMappingSensitivity').value = config.MappingSensitivity || 70;
+
                         Dashboard.hideLoadingMsg();
                     });
                 });
@@ -203,6 +215,8 @@
                         config.Username = document.querySelector('#txtUsername').value.trim();
                         config.Password = document.querySelector('#txtPassword').value;
                         config.EnablePremiumCaching = document.querySelector('#chkEnablePremiumCaching').checked;
+
+                        config.MappingSensitivity = Math.min(Math.max(parseInt(document.querySelector('#txtMappingSensitivity').value) || 70, 0), 100);
 
                         ApiClient.updatePluginConfiguration(CrunchyrollConfigPage.pluginUniqueId, config).then(function (result) {
                             Dashboard.processPluginConfigurationUpdateResult(result);
